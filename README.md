@@ -6,3 +6,6 @@ To install the application
   -execute "javac Filefly.java && java Filefly" in your linux terminal for .java file
   -execute "java -jar Filefly.jar" in your folder where it is downloaded(on linux terminal) for .jar file
   -.deb and .exe file will be there in my portfolio website
+  -  "sudo dpkg <path to .deb file>" to install .deb file
+  -  just open jar file to run it on windows
+  -  to install app on windows Filefly installer is available 
