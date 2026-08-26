@@ -4,6 +4,7 @@ import javax.swing.border.LineBorder;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.geom.RoundRectangle2D;
 import java.io.*;
 import java.net.*;
 import java.util.*;
@@ -11,12 +12,12 @@ import java.util.List;
 import java.util.concurrent.*;
 
 // ==========================================
-// 1. LOGIC (Updated for Custom Save Path)
+// 1. LOGIC (Updated for Custom Port Selection)
 // ==========================================
 
 class LanScanner {
-    public static List<String> getHostsWithOpenPort() {
-        int port = 8080;
+    // UPDATED: Now accepts dynamic port parameter
+    public static List<String> getHostsWithOpenPort(int port) {
         int timeoutMs = 200;
         List<String> openHosts = new CopyOnWriteArrayList<>();
         ExecutorService executor = Executors.newFixedThreadPool(200);
@@ -90,17 +91,18 @@ class ShortIPFinder {
 }
 
 class sender {
-    sender(String ip, File[] files) {
+    // UPDATED: Now uses dynamic port
+    sender(String ip, int port, File[] files) {
         for (File f : files) {
             if (!f.exists()) {
                 System.out.println("File does not exist: " + f.getName());
                 continue;
             }
-            try (Socket s = new Socket(ip, 8080);
+            try (Socket s = new Socket(ip, port);
                  BufferedInputStream bis = new BufferedInputStream(new FileInputStream(f))) {
 
                 DataOutputStream dos = new DataOutputStream(s.getOutputStream());
-                System.out.println("connected. Sending: " + f.getName());
+                System.out.println("Connected to " + ip + ":" + port + ". Sending: " + f.getName());
 
                 dos.writeUTF(f.getName());
                 dos.writeLong(f.length());
@@ -110,7 +112,7 @@ class sender {
                     dos.write(buffer, 0, bytesRead);
                 }
                 dos.flush();
-                System.out.println("file sent: " + f.getName());
+                System.out.println("File sent: " + f.getName());
             } catch (UnknownHostException u) {
                 u.printStackTrace();
             } catch (IOException i) {
@@ -122,20 +124,21 @@ class sender {
 }
 
 class receiver {
-    // UPDATED: Added saveDirectory parameter
-    receiver(String saveDirectory) {
-        try(ServerSocket ss = new ServerSocket(8080)){
-            System.out.println("My ip:" + ShortIPFinder.getPrivateIP());
+    // UPDATED: Dynamic port
+    receiver(String saveDirectory, int port) {
+        try(ServerSocket ss = new ServerSocket(port)){
+            System.out.println("My ip: " + ShortIPFinder.getPrivateIP() + " | Port: " + port);
             System.out.println("Waiting for client... Saving files to: " + saveDirectory);
 
             while(true) {
                 try (Socket cs = ss.accept();
                      DataInputStream dis = new DataInputStream(cs.getInputStream())) {
 
-                    System.out.println("connected");
-                    String filename = dis.readUTF();
+                    // UPDATED FIX: Read the filename FIRST. If it's just a scanner, the connection
+                    // drops here and throws an EOFException. It will bypass the 'connected' print statement completely.
+                    String filename = dis.readUTF(); 
+                    System.out.println("\nDevice successfully connected!");
 
-                    // UPDATED: Dynamically construct the file path
                     String destination = saveDirectory + File.separator + filename;
                     System.out.println("Saving file to: " + destination);
 
@@ -149,10 +152,11 @@ class receiver {
                             remaining -= bytes;
                         }
                         file.flush();
-                        System.out.println("file downloaded successfully.");
+                        System.out.println("File downloaded successfully.");
                     }
                 }
                 catch (EOFException e) {
+                    // It was just a ping/scan. We ignore it completely and silently.
                     System.out.println("-> Ignored a port scan.");
                 }
                 catch (Exception i) {
@@ -167,7 +171,7 @@ class receiver {
 }
 
 // ==========================================
-// 2. MODERN UI
+// 2. MODERN UI (Enhanced Aesthetics & Port Configuration)
 // ==========================================
 
 public class Filefly extends JFrame {
@@ -177,18 +181,21 @@ public class Filefly extends JFrame {
 
     private JPanel hostListPanel;
     private JTextArea logArea;
+    private JTextField portInput;
+    private int activePort = 8080; 
 
+    // Modern Color Palette
     private final Color BG_COLOR = new Color(248, 250, 252);
     private final Color TEXT_DARK = new Color(15, 23, 42);
-    private final Color TEXT_MUTED = new Color(71, 85, 105);
-    private final Color PRIMARY_BTN = new Color(79, 70, 229);
+    private final Color TEXT_MUTED = new Color(100, 116, 139);
+    private final Color PRIMARY_BTN = new Color(99, 102, 241);
     private final Color SUCCESS_BTN = new Color(16, 185, 129);
-    private final Color SECONDARY_BTN = new Color(203, 213, 225);
+    private final Color SECONDARY_BTN = new Color(226, 232, 240);
     private final Color CARD_BG = new Color(255, 255, 255);
 
     public Filefly() {
-        setTitle("Filefly");
-        setSize(500, 550);
+        setTitle("Filefly - Fast Transfers");
+        setSize(520, 600);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
         getContentPane().setBackground(BG_COLOR);
@@ -205,10 +212,10 @@ public class Filefly extends JFrame {
     private void setupLogConsole() {
         logArea = new JTextArea();
         logArea.setEditable(false);
-        logArea.setFont(new Font("Segoe UI", Font.PLAIN, 15));
-        logArea.setBackground(CARD_BG);
-        logArea.setForeground(TEXT_MUTED);
-        logArea.setMargin(new Insets(20, 20, 20, 20));
+        logArea.setFont(new Font("Consolas", Font.PLAIN, 14));
+        logArea.setBackground(TEXT_DARK);
+        logArea.setForeground(new Color(241, 245, 249));
+        logArea.setMargin(new Insets(15, 15, 15, 15));
         logArea.setLineWrap(true);
         logArea.setWrapStyleWord(true);
 
@@ -229,52 +236,98 @@ public class Filefly extends JFrame {
         JPanel panel = new JPanel(new GridBagLayout());
         panel.setBackground(BG_COLOR);
         GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(12, 12, 12, 12);
+        gbc.insets = new Insets(10, 10, 10, 10);
         gbc.gridx = 0; gbc.fill = GridBagConstraints.HORIZONTAL;
 
         JLabel iconLabel = new JLabel("🚀", SwingConstants.CENTER);
-        iconLabel.setFont(new Font("Segoe UI", Font.PLAIN, 48));
+        iconLabel.setFont(new Font("Segoe UI", Font.PLAIN, 55));
 
         JLabel title = new JLabel("Filefly", SwingConstants.CENTER);
-        title.setFont(new Font("Segoe UI", Font.BOLD, 36));
+        title.setFont(new Font("Segoe UI", Font.BOLD, 38));
         title.setForeground(TEXT_DARK);
 
         JLabel subtitle = new JLabel("Lightning fast LAN transfers", SwingConstants.CENTER);
-        subtitle.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+        subtitle.setFont(new Font("Segoe UI", Font.PLAIN, 15));
         subtitle.setForeground(TEXT_MUTED);
 
-        JButton btnSend = createModernButton("Send Files", PRIMARY_BTN, Color.WHITE);
-        JButton btnReceive = createModernButton("Receive Files", SUCCESS_BTN, Color.WHITE);
+        // Port Configuration Panel
+        JPanel portPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        portPanel.setBackground(BG_COLOR);
+        JLabel portLabel = new JLabel("Network Port:");
+        portLabel.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        portLabel.setForeground(TEXT_DARK);
+        
+        portInput = new JTextField("8080", 5);
+        portInput.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+        portInput.setHorizontalAlignment(JTextField.CENTER);
+        portInput.setBorder(BorderFactory.createCompoundBorder(
+            new LineBorder(new Color(203, 213, 225), 2, true),
+            new EmptyBorder(5, 5, 5, 5)
+        ));
+
+        JLabel portTip = new JLabel("(Recommended: 8000 - 9000)");
+        portTip.setFont(new Font("Segoe UI", Font.ITALIC, 12));
+        portTip.setForeground(TEXT_MUTED);
+
+        portPanel.add(portLabel);
+        portPanel.add(portInput);
+        portPanel.add(portTip);
+
+        JButton btnSend = new RoundedButton("Send Files", PRIMARY_BTN, Color.WHITE);
+        JButton btnReceive = new RoundedButton("Receive Files", SUCCESS_BTN, Color.WHITE);
 
         btnSend.addActionListener(e -> {
-            cardLayout.show(mainPanel, "SEND");
-            startScanning();
+            if(validateAndSetPort()) {
+                cardLayout.show(mainPanel, "SEND");
+                startScanning();
+            }
         });
 
-        // UPDATED: Prompts the user to select a directory before starting the receiver
         btnReceive.addActionListener(e -> {
-            JFileChooser chooser = new JFileChooser();
-            chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-            chooser.setDialogTitle("Select Folder to Save Received Files");
+            if(validateAndSetPort()) {
+                JFileChooser chooser = new JFileChooser();
+                chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+                chooser.setDialogTitle("Select Folder to Save Received Files");
 
-            if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-                String saveDir = chooser.getSelectedFile().getAbsolutePath();
-                cardLayout.show(mainPanel, "LOG");
-                System.out.println("====== RECEIVER ACTIVE ======");
+                if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+                    String saveDir = chooser.getSelectedFile().getAbsolutePath();
+                    cardLayout.show(mainPanel, "LOG");
+                    System.out.println("====== RECEIVER ACTIVE ======");
 
-                Thread thread = new Thread(() -> new receiver(saveDir));
-                thread.start();
+                    Thread thread = new Thread(() -> new receiver(saveDir, activePort));
+                    thread.start();
+                }
             }
         });
 
         gbc.gridy = 0; panel.add(iconLabel, gbc);
         gbc.gridy = 1; panel.add(title, gbc);
-        gbc.insets = new Insets(0, 12, 30, 12);
+        gbc.insets = new Insets(0, 10, 25, 10);
         gbc.gridy = 2; panel.add(subtitle, gbc);
-        gbc.insets = new Insets(8, 12, 8, 12);
-        gbc.gridy = 3; panel.add(btnSend, gbc);
-        gbc.gridy = 4; panel.add(btnReceive, gbc);
+        
+        gbc.insets = new Insets(10, 10, 20, 10);
+        gbc.gridy = 3; panel.add(portPanel, gbc);
+        
+        gbc.insets = new Insets(8, 10, 8, 10);
+        gbc.gridy = 4; panel.add(btnSend, gbc);
+        gbc.gridy = 5; panel.add(btnReceive, gbc);
+        
         return panel;
+    }
+    
+    private boolean validateAndSetPort() {
+        try {
+            int parsedPort = Integer.parseInt(portInput.getText().trim());
+            if (parsedPort < 1024 || parsedPort > 65535) {
+                JOptionPane.showMessageDialog(this, "Port must be between 1024 and 65535.", "Invalid Port", JOptionPane.ERROR_MESSAGE);
+                return false;
+            }
+            activePort = parsedPort;
+            return true;
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(this, "Please enter a valid numeric port.", "Invalid Input", JOptionPane.ERROR_MESSAGE);
+            return false;
+        }
     }
 
     private JPanel createSendMenu() {
@@ -301,7 +354,7 @@ public class Filefly extends JFrame {
         panel.add(headerPanel, BorderLayout.NORTH);
         panel.add(scrollPane, BorderLayout.CENTER);
 
-        JButton btnBack = createModernButton("Back to Menu", SECONDARY_BTN, TEXT_DARK);
+        JButton btnBack = new RoundedButton("Back to Menu", SECONDARY_BTN, TEXT_DARK);
         btnBack.addActionListener(e -> cardLayout.show(mainPanel, "MENU"));
         panel.add(btnBack, BorderLayout.SOUTH);
 
@@ -322,7 +375,7 @@ public class Filefly extends JFrame {
         scrollPane.setBorder(new LineBorder(new Color(226, 232, 240), 1, true));
         panel.add(scrollPane, BorderLayout.CENTER);
 
-        JButton btnBack = createModernButton("Back to Menu", SECONDARY_BTN, TEXT_DARK);
+        JButton btnBack = new RoundedButton("Back to Menu", SECONDARY_BTN, TEXT_DARK);
         btnBack.addActionListener(e -> cardLayout.show(mainPanel, "MENU"));
         panel.add(btnBack, BorderLayout.SOUTH);
 
@@ -332,7 +385,7 @@ public class Filefly extends JFrame {
     private void startScanning() {
         hostListPanel.removeAll();
 
-        JLabel scanningLabel = new JLabel("Scanning network...", SwingConstants.CENTER);
+        JLabel scanningLabel = new JLabel("Scanning network on port " + activePort + "...", SwingConstants.CENTER);
         scanningLabel.setFont(new Font("Segoe UI", Font.ITALIC, 14));
         scanningLabel.setForeground(TEXT_MUTED);
         scanningLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -342,7 +395,7 @@ public class Filefly extends JFrame {
         hostListPanel.revalidate(); hostListPanel.repaint();
 
         new Thread(() -> {
-            List<String> openDevices = LanScanner.getHostsWithOpenPort();
+            List<String> openDevices = LanScanner.getHostsWithOpenPort(activePort);
 
             SwingUtilities.invokeLater(() -> {
                 hostListPanel.removeAll();
@@ -370,55 +423,29 @@ public class Filefly extends JFrame {
 
         if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             File[] files = chooser.getSelectedFiles();
-
             if (files.length == 0) return;
 
             cardLayout.show(mainPanel, "LOG");
             System.out.println("====== SENDER ACTIVE ======");
-            System.out.println("Target IP: " + ip);
+            System.out.println("Target IP: " + ip + " | Port: " + activePort);
             System.out.println("Queued " + files.length + " file(s) for transfer.");
 
-            Thread thread = new Thread(() -> new sender(ip, files));
+            Thread thread = new Thread(() -> new sender(ip, activePort, files));
             thread.start();
         }
     }
 
-    private JButton createModernButton(String text, Color bg, Color fg) {
-        JButton btn = new JButton(text);
-        btn.setFont(new Font("Segoe UI", Font.BOLD, 15));
-        btn.setBackground(bg);
-        btn.setForeground(fg);
-        btn.setFocusPainted(false);
-        btn.setBorderPainted(false);
-        btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btn.setPreferredSize(new Dimension(220, 48));
-
-        btn.addMouseListener(new MouseAdapter() {
-            public void mouseEntered(MouseEvent e) {
-                btn.setBackground(bg.darker());
-            }
-            public void mouseExited(MouseEvent e) {
-                btn.setBackground(bg);
-            }
-        });
-        return btn;
-    }
-
     private JButton createHostCardButton(String ip) {
-        JButton btn = new JButton("🖥️  " + ip);
+        JButton btn = new RoundedButton("🖥️  " + ip, CARD_BG, PRIMARY_BTN);
         btn.setFont(new Font("Segoe UI", Font.BOLD, 16));
-        btn.setBackground(CARD_BG);
-        btn.setForeground(PRIMARY_BTN);
-        btn.setFocusPainted(false);
-        btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
         btn.setHorizontalAlignment(SwingConstants.LEFT);
         btn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 55));
-
+        
         btn.setBorder(BorderFactory.createCompoundBorder(
                 new LineBorder(new Color(226, 232, 240), 1, true),
                 new EmptyBorder(15, 20, 15, 20)
         ));
-
+        
         btn.addMouseListener(new MouseAdapter() {
             public void mouseEntered(MouseEvent e) {
                 btn.setBackground(new Color(241, 245, 249));
@@ -430,9 +457,46 @@ public class Filefly extends JFrame {
         return btn;
     }
 
+    // Aesthetic UI Component Upgrade - Uses Java Basic Graphics libraries!
+    class RoundedButton extends JButton {
+        private final Color bgColor;
+
+        public RoundedButton(String text, Color bgColor, Color fgColor) {
+            super(text);
+            this.bgColor = bgColor;
+            setForeground(fgColor);
+            setFocusPainted(false);
+            setContentAreaFilled(false);
+            setBorderPainted(false);
+            setCursor(new Cursor(Cursor.HAND_CURSOR));
+            setFont(new Font("Segoe UI", Font.BOLD, 15));
+            setPreferredSize(new Dimension(220, 48));
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            
+            // Hover effect slightly darkens the chosen background
+            g2.setColor(getModel().isRollover() ? bgColor.darker() : bgColor);
+            g2.fill(new RoundRectangle2D.Float(0, 0, getWidth(), getHeight(), 15, 15));
+            
+            super.paintComponent(g);
+            g2.dispose();
+        }
+    }
+
     public static void main(String[] args) {
         try {
-            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+            // Use Nimbus for a cleaner baseline if cross-platform isn't specifically required.
+            // Still falls back safely if unavailable. 
+            for (UIManager.LookAndFeelInfo info : UIManager.getInstalledLookAndFeels()) {
+                if ("Nimbus".equals(info.getName())) {
+                    UIManager.setLookAndFeel(info.getClassName());
+                    break;
+                }
+            }
         } catch (Exception ignored) {}
 
         SwingUtilities.invokeLater(() -> new Filefly().setVisible(true));
