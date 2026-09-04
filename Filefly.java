@@ -12,13 +12,12 @@ import java.util.List;
 import java.util.concurrent.*;
 
 // ==========================================
-// 1. LOGIC (Updated for Custom Port Selection)
+// 1. LOGIC 
 // ==========================================
 
 class LanScanner {
-    // UPDATED: Now accepts dynamic port parameter
     public static List<String> getHostsWithOpenPort(int port) {
-        int timeoutMs = 50; 
+        int timeoutMs = 250; // Increased timeout for much better accuracy while staying fast
         List<String> openHosts = new CopyOnWriteArrayList<>();
         ExecutorService executor = Executors.newFixedThreadPool(255);
 
@@ -64,7 +63,7 @@ class LanScanner {
                 if (foundLan) break;
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            System.out.println("Scanner error: " + e.getMessage()); // Clean exception
         }
 
         executor.shutdown();
@@ -91,7 +90,6 @@ class ShortIPFinder {
 }
 
 class sender {
-    // UPDATED: Now uses dynamic port
     sender(String ip, int port, File[] files) {
         for (File f : files) {
             if (!f.exists()) {
@@ -114,35 +112,55 @@ class sender {
                 dos.flush();
                 System.out.println("File sent: " + f.getName());
             } catch (UnknownHostException u) {
-                u.printStackTrace();
+                System.out.println("Unknown host: " + u.getMessage()); // Clean exception
             } catch (IOException i) {
-                i.printStackTrace();
+                System.out.println("Connection error: " + i.getMessage()); // Clean exception
             }
         }
         System.out.println("All transfers completed.");
     }
 }
 
-class receiver {
+class receiver implements Runnable {
+    private String saveDirectory;
+    private int port;
+    private volatile boolean running = true;
+    private ServerSocket serverSocket;
+
     receiver(String saveDirectory, int port) {
-        try(ServerSocket ss = new ServerSocket(port)){
+        this.saveDirectory = saveDirectory;
+        this.port = port;
+    }
+
+    // Method to cleanly stop the server and release the port
+    public void stopServer() {
+        running = false;
+        if (serverSocket != null) {
+            try {
+                serverSocket.close();
+            } catch (IOException e) {
+                System.out.println("Error closing server: " + e.getMessage());
+            }
+        }
+    }
+
+    @Override
+    public void run() {
+        try {
+            serverSocket = new ServerSocket(port);
             System.out.println("My ip: " + ShortIPFinder.getPrivateIP() + " | Port: " + port);
             System.out.println("Waiting for client... Saving files to: " + saveDirectory);
 
-            while(true) {
-                try (Socket cs = ss.accept();
+            while (running) {
+                try (Socket cs = serverSocket.accept();
                      DataInputStream dis = new DataInputStream(cs.getInputStream())) {
 
-                    // Read filename first to bypass port scans
-                    String filename = dis.readUTF(); 
-                    
-                    // 3. Replaced "\nDevice successfully connected!" with "connected"
+                    String filename = dis.readUTF();
                     System.out.println("connected");
 
                     String destination = saveDirectory + File.separator + filename;
                     File f = new File(destination);
 
-                    // 2. Handle duplicate files
                     if (f.exists()) {
                         final int[] choice = new int[1];
                         try {
@@ -158,10 +176,9 @@ class receiver {
                                         options[1]);
                             });
                         } catch (Exception e) {
-                            choice[0] = 1; // Default to "Save Anyway" if UI thread fails
+                            choice[0] = 1;
                         }
 
-                        // If user chose "Save Anyway" (index 1)
                         if (choice[0] == 1) {
                             String name = filename;
                             String ext = "";
@@ -179,7 +196,6 @@ class receiver {
                                 count++;
                             }
                         }
-                        // If "Replace" (index 0), the existing file f is overwritten normally
                     }
 
                     System.out.println("Saving file to: " + destination);
@@ -195,24 +211,29 @@ class receiver {
                         file.flush();
                         System.out.println("File downloaded successfully.\n");
                     }
-                }
-                catch (EOFException e) {
-                    // 3. Removed the "Ignored a port scan" message. 
-                    // Fails silently now.
-                }
-                catch (Exception i) {
-                    i.printStackTrace();
+                } catch (EOFException e) {
+                    // Fails silently now
+                } catch (SocketException e) {
+                    if (!running) {
+                        System.out.println("Server stopped gracefully.");
+                        break;
+                    } else {
+                        System.out.println("Socket error: " + e.getMessage());
+                    }
+                } catch (Exception i) {
+                    System.out.println("Transfer error: " + i.getMessage());
                 }
             }
-        }
-        catch (Exception i){
-            i.printStackTrace();
+        } catch (BindException b) {
+            System.out.println("Port " + port + " is already in use. Please select a different port or restart the app.");
+        } catch (Exception i) {
+            System.out.println("Server error: " + i.getMessage());
         }
     }
 }
 
 // ==========================================
-// 2. MODERN UI (Enhanced Aesthetics & Port Configuration)
+// 2. MODERN UI 
 // ==========================================
 
 public class Filefly extends JFrame {
@@ -224,6 +245,9 @@ public class Filefly extends JFrame {
     private JTextArea logArea;
     private JTextField portInput;
     private int activePort = 8080; 
+    
+    // Tracks the current receiver server to safely close it later
+    private receiver currentReceiver;
 
     // Modern Color Palette
     private final Color BG_COLOR = new Color(248, 250, 252);
@@ -237,9 +261,20 @@ public class Filefly extends JFrame {
     public Filefly() {
         setTitle("Filefly - Fast Transfers");
         setSize(520, 600);
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE); // Managed via WindowListener
         setLocationRelativeTo(null);
         getContentPane().setBackground(BG_COLOR);
+
+        // Closes the server socket cleanly when hitting the "X" button
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent windowEvent) {
+                if (currentReceiver != null) {
+                    currentReceiver.stopServer();
+                }
+                System.exit(0);
+            }
+        });
 
         setupLogConsole();
 
@@ -291,7 +326,6 @@ public class Filefly extends JFrame {
         subtitle.setFont(new Font("Segoe UI", Font.PLAIN, 15));
         subtitle.setForeground(TEXT_MUTED);
 
-        // Port Configuration Panel
         JPanel portPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
         portPanel.setBackground(BG_COLOR);
         JLabel portLabel = new JLabel("Network Port:");
@@ -335,7 +369,9 @@ public class Filefly extends JFrame {
                     cardLayout.show(mainPanel, "LOG");
                     System.out.println("====== RECEIVER ACTIVE ======");
 
-                    Thread thread = new Thread(() -> new receiver(saveDir, activePort));
+                    // Instantiate the receiver and keep the reference so it can be safely closed
+                    currentReceiver = new receiver(saveDir, activePort);
+                    Thread thread = new Thread(currentReceiver);
                     thread.start();
                 }
             }
@@ -417,7 +453,14 @@ public class Filefly extends JFrame {
         panel.add(scrollPane, BorderLayout.CENTER);
 
         JButton btnBack = new RoundedButton("Back to Menu", SECONDARY_BTN, TEXT_DARK);
-        btnBack.addActionListener(e -> cardLayout.show(mainPanel, "MENU"));
+        btnBack.addActionListener(e -> {
+            // Stops the active server cleanly to free up the port
+            if (currentReceiver != null) {
+                currentReceiver.stopServer();
+                currentReceiver = null;
+            }
+            cardLayout.show(mainPanel, "MENU");
+        });
         panel.add(btnBack, BorderLayout.SOUTH);
 
         return panel;
@@ -498,7 +541,6 @@ public class Filefly extends JFrame {
         return btn;
     }
 
-    // Aesthetic UI Component Upgrade - Uses Java Basic Graphics libraries!
     class RoundedButton extends JButton {
         private final Color bgColor;
 
@@ -519,7 +561,6 @@ public class Filefly extends JFrame {
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             
-            // Hover effect slightly darkens the chosen background
             g2.setColor(getModel().isRollover() ? bgColor.darker() : bgColor);
             g2.fill(new RoundRectangle2D.Float(0, 0, getWidth(), getHeight(), 15, 15));
             
@@ -530,8 +571,6 @@ public class Filefly extends JFrame {
 
     public static void main(String[] args) {
         try {
-            // Use Nimbus for a cleaner baseline if cross-platform isn't specifically required.
-            // Still falls back safely if unavailable. 
             for (UIManager.LookAndFeelInfo info : UIManager.getInstalledLookAndFeels()) {
                 if ("Nimbus".equals(info.getName())) {
                     UIManager.setLookAndFeel(info.getClassName());
