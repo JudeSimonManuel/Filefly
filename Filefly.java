@@ -18,9 +18,9 @@ import java.util.concurrent.*;
 class LanScanner {
     // UPDATED: Now accepts dynamic port parameter
     public static List<String> getHostsWithOpenPort(int port) {
-        int timeoutMs = 200;
+        int timeoutMs = 50; 
         List<String> openHosts = new CopyOnWriteArrayList<>();
-        ExecutorService executor = Executors.newFixedThreadPool(200);
+        ExecutorService executor = Executors.newFixedThreadPool(255);
 
         try {
             Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
@@ -124,7 +124,6 @@ class sender {
 }
 
 class receiver {
-    // UPDATED: Dynamic port
     receiver(String saveDirectory, int port) {
         try(ServerSocket ss = new ServerSocket(port)){
             System.out.println("My ip: " + ShortIPFinder.getPrivateIP() + " | Port: " + port);
@@ -134,15 +133,57 @@ class receiver {
                 try (Socket cs = ss.accept();
                      DataInputStream dis = new DataInputStream(cs.getInputStream())) {
 
-                    // UPDATED FIX: Read the filename FIRST. If it's just a scanner, the connection
-                    // drops here and throws an EOFException. It will bypass the 'connected' print statement completely.
+                    // Read filename first to bypass port scans
                     String filename = dis.readUTF(); 
-                    System.out.println("\nDevice successfully connected!");
+                    
+                    // 3. Replaced "\nDevice successfully connected!" with "connected"
+                    System.out.println("connected");
 
                     String destination = saveDirectory + File.separator + filename;
+                    File f = new File(destination);
+
+                    // 2. Handle duplicate files
+                    if (f.exists()) {
+                        final int[] choice = new int[1];
+                        try {
+                            SwingUtilities.invokeAndWait(() -> {
+                                Object[] options = {"Replace", "Save Anyway"};
+                                choice[0] = JOptionPane.showOptionDialog(null,
+                                        "A file named '" + filename + "' already exists. What would you like to do?",
+                                        "File Conflict",
+                                        JOptionPane.YES_NO_OPTION,
+                                        JOptionPane.WARNING_MESSAGE,
+                                        null,
+                                        options,
+                                        options[1]);
+                            });
+                        } catch (Exception e) {
+                            choice[0] = 1; // Default to "Save Anyway" if UI thread fails
+                        }
+
+                        // If user chose "Save Anyway" (index 1)
+                        if (choice[0] == 1) {
+                            String name = filename;
+                            String ext = "";
+                            int dotIndex = filename.lastIndexOf(".");
+                            
+                            if (dotIndex > 0) {
+                                name = filename.substring(0, dotIndex);
+                                ext = filename.substring(dotIndex);
+                            }
+                            
+                            int count = 1;
+                            while (f.exists()) {
+                                destination = saveDirectory + File.separator + name + " (" + count + ")" + ext;
+                                f = new File(destination);
+                                count++;
+                            }
+                        }
+                        // If "Replace" (index 0), the existing file f is overwritten normally
+                    }
+
                     System.out.println("Saving file to: " + destination);
 
-                    File f = new File(destination);
                     try (BufferedOutputStream file = new BufferedOutputStream(new FileOutputStream(f))) {
                         byte[] buffer = new byte[4096];
                         int bytes;
@@ -152,12 +193,12 @@ class receiver {
                             remaining -= bytes;
                         }
                         file.flush();
-                        System.out.println("File downloaded successfully.");
+                        System.out.println("File downloaded successfully.\n");
                     }
                 }
                 catch (EOFException e) {
-                    // It was just a ping/scan. We ignore it completely and silently.
-                    System.out.println("-> Ignored a port scan.");
+                    // 3. Removed the "Ignored a port scan" message. 
+                    // Fails silently now.
                 }
                 catch (Exception i) {
                     i.printStackTrace();
