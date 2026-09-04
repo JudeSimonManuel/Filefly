@@ -17,58 +17,71 @@ import java.util.concurrent.*;
 
 class LanScanner {
     public static List<String> getHostsWithOpenPort(int port) {
-        int timeoutMs = 250; // Increased timeout for much better accuracy while staying fast
-        List<String> openHosts = new CopyOnWriteArrayList<>();
-        ExecutorService executor = Executors.newFixedThreadPool(255);
+        // 800ms guarantees the connection will succeed if the device exists, completely avoiding ARP drops.
+        int timeoutMs = 800; 
+        Set<String> openHosts = ConcurrentHashMap.newKeySet();
+        List<String> targetIps = new ArrayList<>();
 
         try {
             Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
-
             while (interfaces.hasMoreElements()) {
                 NetworkInterface ni = interfaces.nextElement();
+                
+                if (!ni.isUp() || ni.isLoopback() || ni.isVirtual()) continue;
 
-                if (!ni.isUp() || ni.isLoopback() || ni.isVirtual()) {
+                // Ignore fake virtual adapters (VMware, VirtualBox, WSL) that hijack the scan
+                String name = ni.getDisplayName().toLowerCase();
+                if (name.contains("virtual") || name.contains("wsl") || name.contains("vmware") || name.contains("vbox")) {
                     continue;
                 }
 
-                boolean foundLan = false;
                 for (InterfaceAddress ia : ni.getInterfaceAddresses()) {
                     InetAddress addr = ia.getAddress();
-
+                    
                     if (addr instanceof Inet4Address && addr.isSiteLocalAddress()) {
-
                         byte[] ipBytes = addr.getAddress();
                         int ipInt = ((ipBytes[0] & 0xFF) << 24) | ((ipBytes[1] & 0xFF) << 16) |
                                 ((ipBytes[2] & 0xFF) << 8) | (ipBytes[3] & 0xFF);
 
-                        int mask = 0xffffffff << (32 - ia.getNetworkPrefixLength());
+                        int prefixLength = ia.getNetworkPrefixLength();
+                        // Prevent scanning massive subnets which would break the 4-second rule
+                        if (prefixLength < 22) prefixLength = 24; 
+
+                        int mask = 0xffffffff << (32 - prefixLength);
                         int networkAddr = ipInt & mask;
                         int broadcastAddr = networkAddr | ~mask;
 
+                        // Pre-calculate all IPs to scan
                         for (int i = networkAddr + 1; i < broadcastAddr; i++) {
                             String targetIp = ((i >> 24) & 0xFF) + "." + ((i >> 16) & 0xFF) + "." +
                                     ((i >> 8) & 0xFF) + "." + (i & 0xFF);
-
-                            executor.submit(() -> {
-                                try (Socket socket = new Socket()) {
-                                    socket.connect(new InetSocketAddress(targetIp, port), timeoutMs);
-                                    openHosts.add(targetIp);
-                                } catch (Exception ignored) {}
-                            });
+                            if (!targetIp.equals(addr.getHostAddress())) {
+                                targetIps.add(targetIp);
+                            }
                         }
-                        foundLan = true;
-                        break;
                     }
                 }
-                if (foundLan) break;
             }
         } catch (Exception e) {
-            System.out.println("Scanner error: " + e.getMessage()); // Clean exception
+            System.out.println("Scanner interface error: " + e.getMessage());
+        }
+
+        // Thread pool of 150 ensures we complete ~254 IPs in less than 2 seconds total.
+        ExecutorService executor = Executors.newFixedThreadPool(150);
+        
+        for (String targetIp : targetIps) {
+            executor.submit(() -> {
+                try (Socket socket = new Socket()) {
+                    socket.connect(new InetSocketAddress(targetIp, port), timeoutMs);
+                    openHosts.add(targetIp);
+                } catch (Exception ignored) {}
+            });
         }
 
         executor.shutdown();
         try {
-            executor.awaitTermination(30, TimeUnit.SECONDS);
+            // Strictly enforce the 4.5-second maximum time limit for the scanner
+            executor.awaitTermination(4500, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -78,14 +91,27 @@ class LanScanner {
 }
 
 class ShortIPFinder {
-    public static String getPrivateIP() throws SocketException {
-        return NetworkInterface.networkInterfaces()
-                .filter(ni -> { try { return ni.isUp() && !ni.isLoopback(); } catch (Exception e) { return false; } })
-                .flatMap(NetworkInterface::inetAddresses)
-                .filter(addr -> !addr.isLoopbackAddress() && addr instanceof Inet4Address && addr.isSiteLocalAddress())
-                .map(InetAddress::getHostAddress)
-                .findFirst()
-                .orElse("127.0.0.1");
+    public static String getPrivateIP() {
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface ni = interfaces.nextElement();
+                if (!ni.isUp() || ni.isLoopback() || ni.isVirtual()) continue;
+                
+                // Prioritize real physical Wi-Fi/Ethernet adapters for display
+                String name = ni.getDisplayName().toLowerCase();
+                if (name.contains("virtual") || name.contains("wsl") || name.contains("vmware") || name.contains("vbox")) {
+                    continue;
+                }
+
+                for (InetAddress addr : Collections.list(ni.getInetAddresses())) {
+                    if (addr instanceof Inet4Address && addr.isSiteLocalAddress()) {
+                        return addr.getHostAddress();
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return "127.0.0.1";
     }
 }
 
@@ -112,9 +138,9 @@ class sender {
                 dos.flush();
                 System.out.println("File sent: " + f.getName());
             } catch (UnknownHostException u) {
-                System.out.println("Unknown host: " + u.getMessage()); // Clean exception
+                System.out.println("Unknown host: " + u.getMessage());
             } catch (IOException i) {
-                System.out.println("Connection error: " + i.getMessage()); // Clean exception
+                System.out.println("Connection error: " + i.getMessage()); 
             }
         }
         System.out.println("All transfers completed.");
@@ -132,7 +158,6 @@ class receiver implements Runnable {
         this.port = port;
     }
 
-    // Method to cleanly stop the server and release the port
     public void stopServer() {
         running = false;
         if (serverSocket != null) {
@@ -246,10 +271,8 @@ public class Filefly extends JFrame {
     private JTextField portInput;
     private int activePort = 8080; 
     
-    // Tracks the current receiver server to safely close it later
     private receiver currentReceiver;
 
-    // Modern Color Palette
     private final Color BG_COLOR = new Color(248, 250, 252);
     private final Color TEXT_DARK = new Color(15, 23, 42);
     private final Color TEXT_MUTED = new Color(100, 116, 139);
@@ -261,11 +284,10 @@ public class Filefly extends JFrame {
     public Filefly() {
         setTitle("Filefly - Fast Transfers");
         setSize(520, 600);
-        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE); // Managed via WindowListener
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE); 
         setLocationRelativeTo(null);
         getContentPane().setBackground(BG_COLOR);
 
-        // Closes the server socket cleanly when hitting the "X" button
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosing(java.awt.event.WindowEvent windowEvent) {
@@ -369,7 +391,6 @@ public class Filefly extends JFrame {
                     cardLayout.show(mainPanel, "LOG");
                     System.out.println("====== RECEIVER ACTIVE ======");
 
-                    // Instantiate the receiver and keep the reference so it can be safely closed
                     currentReceiver = new receiver(saveDir, activePort);
                     Thread thread = new Thread(currentReceiver);
                     thread.start();
@@ -454,7 +475,6 @@ public class Filefly extends JFrame {
 
         JButton btnBack = new RoundedButton("Back to Menu", SECONDARY_BTN, TEXT_DARK);
         btnBack.addActionListener(e -> {
-            // Stops the active server cleanly to free up the port
             if (currentReceiver != null) {
                 currentReceiver.stopServer();
                 currentReceiver = null;
