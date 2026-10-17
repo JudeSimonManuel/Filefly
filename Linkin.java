@@ -261,7 +261,11 @@ class receiver implements Runnable {
 // 2. MODERN UI 
 // ==========================================
 
+
 public class Linkin extends JFrame {
+
+public class Filefly extends JFrame {
+
 
     private final CardLayout cardLayout = new CardLayout();
     private final JPanel mainPanel = new JPanel(cardLayout);
@@ -281,8 +285,13 @@ public class Linkin extends JFrame {
     private final Color SECONDARY_BTN = new Color(226, 232, 240);
     private final Color CARD_BG = new Color(255, 255, 255);
 
+
     public Linkin() {
         setTitle("Linkin - Fast Transfers");
+
+    public Filefly() {
+        setTitle("Filefly - Fast Transfers");
+
         setSize(520, 600);
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE); 
         setLocationRelativeTo(null);
@@ -340,7 +349,11 @@ public class Linkin extends JFrame {
         JLabel iconLabel = new JLabel("🚀", SwingConstants.CENTER);
         iconLabel.setFont(new Font("Segoe UI", Font.PLAIN, 55));
 
+
         JLabel title = new JLabel("Linkin", SwingConstants.CENTER);
+
+        JLabel title = new JLabel("Filefly", SwingConstants.CENTER);
+
         title.setFont(new Font("Segoe UI", Font.BOLD, 38));
         title.setForeground(TEXT_DARK);
 
@@ -599,6 +612,10 @@ public class Linkin extends JFrame {
             }
         } catch (Exception ignored) {}
 
+
         SwingUtilities.invokeLater(() -> new Linkin().setVisible(true));
+
+        SwingUtilities.invokeLater(() -> new Filefly().setVisible(true));
+
     }
 }
