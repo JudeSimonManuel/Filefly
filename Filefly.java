@@ -613,7 +613,7 @@ public class Filefly extends JFrame {
         } catch (Exception ignored) {}
 
 
-        SwingUtilities.invokeLater(() -> new Linkin().setVisible(true));
+        
 
         SwingUtilities.invokeLater(() -> new Filefly().setVisible(true));
 
